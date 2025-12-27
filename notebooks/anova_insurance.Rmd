@@ -1,0 +1,917 @@
+---
+title: "Đồ án kết thúc học phần"
+output:
+  html_document:
+    df_print: paged
+---
+
+Họ tên: Chu Thị Bảo Ngọc - MSHV: 22C01035
+
+## **Hoạt động 1.2:**
+
+-   [Dataset insurance.csv:]{.underline}
+
+```{r}
+library(car)
+library(Hmisc)
+library(magrittr)
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(ggfortify)
+library(agricolae)
+library(EnvStats)
+```
+
+```{r}
+insurance <- read.csv("insurance.csv")
+dim(insurance)
+```
+
+Có thể thấy bộ dữ liệu bao gồm 1338 quan trắc và 7 biến.
+
+```{r}
+head(insurance)
+```
+
+#### [**Giới thiệu bộ dữ liệu:**]{.underline}
+
+Bộ dữ liệu insurance.csv chứa các thông tin về số tiền bảo hiểm dùng trong y tế cho những người dân ở Mỹ. Dữ liệu gốc được cung cấp tại:
+
+<https://www.kaggle.com/datasets/mirichoi0218/insurance>
+
+Bộ dữ liệu gồm 1338 quan trắc và 7 biến sau:
+
+-   "age": độ tuổi của người sử dụng quyền lợi bảo hiểm y tế,
+
+-   "sex": giới tính của người sử dụng bảo hiểm y tế (male/female),
+
+-   "bmi": chỉ số BMI,
+
+-   "children": số người phụ thuộc (con),
+
+-   "smoker": người sử dụng bảo hiểm có hút thuốc hay không (yes/no),
+
+-   "region": vùng sinh sống của người sở hữu bảo hiểm y tế,
+
+-   "charges": chi phí bảo hiểm y tế chi trả cho người được khảo sát.
+
+#### [**Mục tiêu:**]{.underline}
+
+Ta sẽ áp dụng phương pháp phân tích phương sai nhiều nhân tố (ANOVA k nhân tố với $k \geq 3$) để xem xét các nhân tố về vùng sinh sống, giới tính, việc hút thuốc, độ tuổi, ... của một người có ảnh hưởng tới chi phí bảo hiểm y tế chi trả cho người đó như thế nào.
+
+### (a) Tiền xử lý dữ liệu:
+
+```{r}
+str(insurance)
+```
+
+Ta thấy bộ dữ liệu có 3 biến định tính là "sex", "smoker", "region". Vậy đầu tiên ta đưa các biến này về dạng nhân tố:
+
+```{r}
+# Đưa các biến định tính về dạng nhân tố 
+insurance$sex <- as.factor(insurance$sex)
+insurance$smoker <- as.factor(insurance$smoker)
+insurance$region <- as.factor(insurance$region)
+```
+
+```{r}
+summary(insurance)
+```
+
+Từ kết quả hàm summary(), nhận xét rằng:
+
+-   Những người sử dụng quyền lợi bảo hiểm y tế có độ tuổi trung bình là 39, chỉ số BMI trung bình là 30.66, số con trung bình là 1, chi phí bảo hiểm y tế trung bình là 13270.
+
+-   Sự chênh lệch về giới tính giữa những người sử dụng quyền lợi bảo hiểm y tế là không đáng kể.
+
+-   Số lượng người sử dụng quyền lợi bảo hiểm y tế sinh sống ở 4 vùng là xấp xỉ bằng nhau.
+
+-   Số lượng người sử dụng quyền lợi bảo hiểm y tế không hút thuốc nhiều gấp gần 4 lần so với người sử dụng quyền lợi bảo hiểm y tế có hút thuốc.
+
+**Kiểm tra các giá trị khuyết:**
+
+```{r}
+# Kiểm tra các giá trị khuyết 
+colSums(is.na(insurance))[colSums(is.na(insurance))>0]
+```
+
+Có thể thấy bộ dữ liệu không có biến nào chứa giá trị khuyết.
+
+**Kiểm tra các giá trị ngoại lai của các biến định lượng:**
+
+```{r}
+# Kiểm tra các giá trị ngoại lai 
+# Box - plot 
+j <- 0 
+par(mfrow = c(2, 2))
+lab <- colnames(subset(insurance, select = -c(sex, smoker, region)))
+for (i in subset(insurance, select = -c(sex, smoker, region))){
+  j <- j + 1 
+  boxplot(i, outcol = 'red', xlab = lab[j])
+}
+```
+
+Theo biểu đồ boxplot, có vẻ như biến "bmi" và "charges" có các giá trị ngoại lai.
+
+Giả sử rằng hai biến "bmi" và "charges" khi không có giá trị ngoại lai thì sẽ tuân theo phân phối chuẩn (\*). Khi đó, ta có thể kiểm tra sự hiện diện của giá trị ngoại lai trong các biến này bằng kiểm định Rosner:
+
+*H~0~ : Không có giá trị ngoại lai nào.*
+
+*H~1~ : Tồn tại từ 1 đến k giá trị ngoại lai.* (k là số lượng giá trị ngoại lai tối đa mà ta dự đoán)
+
+Thuật toán:
+
+1.  So sánh thống kê R~k~ và giá trị tới hạn $\lambda_{k}$ , nếu $R_{k} > \lambda_{k}$ thì kết luận rằng có k giá trị ngoại lai.
+2.  Nếu $R_{k} < \lambda_{k}$ thì ta so sánh R~k-1~ và $\lambda_{k-1}$ . Nếu $R_{k-1} > \lambda_{k-1}$ thì kết luận rằng có k - 1 giá trị ngoại lai.
+3.  Lặp lại bước trên đến khi tìm được một số lượng các giá trị ngoại lai hoặc đến khi không tìm được giá trị ngoại lai nào.
+
+```{r}
+# Rosner Test 
+rosnerTest(insurance$bmi, k = 2)
+rosnerTest(insurance$charges, k = 2)
+```
+
+Theo các kết quả kiểm định Rosner với k = 2, biến "bmi" không có giá trị ngoại lai, còn biến "charges" có 1 giá trị ngoại lai là quan trắc thứ 544.
+
+Ta thử sử dụng khoảng cách Mahalanobis để kiểm định xem quan trắc thứ i có là giá trị ngoại lai đa biến hay không:
+
+*H~0~ : Quan trắc thứ i không là giá trị ngoại lai đa biến.*
+
+*H~1~ : Quan trắc thứ i là giá trị ngoại lai đa biến.*
+
+Ở đây, ta chỉ tính khoảng cách từ giá trị của các biến định lượng.
+
+```{r}
+# Khoảng cách Mahalanobis 
+insurance_ <- subset(insurance, select = -c(sex, smoker, region)) 
+mahal_dist <- mahalanobis(insurance_, colMeans(insurance_), cov(insurance_), tol=1e-20)
+p_vals_mahal <- pchisq(mahal_dist, df = 4 - 1, lower.tail=FALSE) 
+# df = Số biến định lượng - 1
+
+mahal <- data.frame(mahal_dist, p_vals_mahal)
+mahal[p_vals_mahal < 0.001,]
+```
+
+Từ đó, ta thấy với 7 quan trắc bao gồm: quan trắc thứ 439, 544, 578, 1048, 1231, 1301, 1318 thì p - value \< 0.001 nên ta bác bỏ H~0~ với mức ý nghĩa 0.001 và kết luận rằng các quan trắc này là các giá trị ngoại lai đa biến.
+
+Vì số lượng giá trị ngoại lai khá ít nên ta sẽ tiến hành bỏ các giá trị này ra khỏi bộ dữ liệu:
+
+```{r}
+# Bỏ các giá trị ngoại lai 
+insurance <- insurance[-c(439, 544, 578, 1048, 1231, 1301, 1318), ]
+dim(insurance)
+```
+
+Như vậy, ta đã xử lý xong các giá trị ngoại lai trong bộ dữ liệu.
+
+### (b) Áp dụng phương pháp ANOVA k nhân tố để xem xét các nhân tố của một người có ảnh hưởng đến chi phí bảo hiểm y tế của người đó như thế nào:
+
+Đầu tiên, ta cần chia cấp độ cho các biến định lượng "age", "bmi", "children" trước khi đưa chúng về dạng nhân tố để thực hiện ANOVA. Ta sẽ muốn chia làm sao để số lượng quan trắc trong các cấp độ là xấp xỉ bằng nhau cho từng biến nhằm tránh tình trạng xuất hiện một số nhóm (tổ hợp các cấp độ của các nhân tố) có cỡ mẫu bằng 0 và nhằm đưa thiết kế thí nghiệm về dạng gần cân bằng nhất có thể (cỡ mẫu các nhóm gần bằng nhau).
+
+```{r}
+hist(insurance$age)
+hist(insurance$bmi)
+hist(insurance$children)
+```
+
+Theo các biểu đồ histogram của ba biến định lượng "age", "bmi", "children", ta thấy:
+
+-   Các giá trị của biến "age" được phân bố khá đều trong khoảng từ 18 đến 64. Vì vậy, ta có thể chia biến "age" thành bao nhiêu cấp độ đều được.
+
+-   Các giá trị của biến "bmi" tập trung nhiều ở khoảng từ 25 đến 35. Vì vậy, một cách trực quan, ta có thể chia biến "bmi" thành 2 cấp độ: $bmi < 30$ và $bmi \geq 30$.
+
+-   Các giá trị của biến "children" chủ yếu tập trung ở giá trị 0. Vì vậy, một cách trực quan, ta có thể chia biến "bmi" thành 2 cấp độ: $children \in \{0,1\}$ và $children \in \{2,3,4,5\}$.
+
+Nay, ta sử dụng hàm cut2() để thực hiện việc chia mỗi biến trên thành 2 cấp độ:
+
+```{r}
+# Chia cấp độ cho các biến định lượng 
+insurance$age <- cut2(insurance$age, g = 2)
+insurance$bmi <- cut2(insurance$bmi, g = 2)
+insurance$children <- cut2(insurance$children, g = 2)
+summary(insurance$age)
+summary(insurance$bmi)
+summary(insurance$children)
+```
+
+Như vậy, hàm cut2() đã chia biến "age" thành 2 cấp độ là $18 \leq age < 40$ và $40 \leq age \leq 64$ , với số lượng quan trắc lần lượt là 671 và 660. Biến "bmi" được chia thành 2 cấp độ là $16 \leq bmi < 30.4$ và $30.4 \leq bmi \leq 50.4$ , với số lượng quan trắc lần lượt là 667 và 664. Còn biến "children" được chia thành 2 cấp độ là $children \in \{0,1\}$ và $children \in \{2,3,4,5\}$ , với số lượng quan trắc lần lượt là 893 và 438. Điều này tương đối khớp với những gì ta đã nhận xét từ histogram ban nãy, mặc dù cách chia cấp độ của biến children vẫn không đảm bảo được số quan trắc trong hai cấp độ gần bằng nhau, do số lượng quan trắc ứng với $children = 0$ là khá lớn.
+
+```{r}
+str(insurance)
+```
+
+Như vậy, ta đã đưa tất cả các biến ngoại trừ biến phụ thuộc charges về dạng nhân tố.
+
+Trong phương pháp ANOVA, vì sẽ chỉ làm việc với các nhân tố thay vì các biến định lượng như trong mô hình hồi quy tuyến tính nên ta không cần kiểm tra hiện tượng đa cộng tuyến.
+
+Tiếp theo, ta thử kiểm tra cỡ mẫu của từng nhóm trong thiết kế thí nghiệm (cột Freq trong bảng):
+
+```{r}
+# Số lượng quan trắc (Freq) ứng với từng tổ hợp các cấp độ của các nhân tố 
+tab <- as.data.frame(with(insurance, table(age, sex, bmi, children, smoker, region)))
+head(tab)
+```
+
+Vì cỡ mẫu của một số nhóm lớn hơn 1 nên ta sẽ áp dụng phương pháp ANOVA có lặp. Đồng thời, vì cỡ mẫu của các nhóm không bằng nhau nên ta sẽ áp dụng phương pháp ANOVA với thiết kế không cân bằng.
+
+```{r}
+# Kiểm tra nhóm có cỡ mẫu bằng 0 
+tab[tab$Freq == 0,]
+```
+
+Ta thấy tất cả các nhóm đều có cỡ mẫu lớn hơn 0. Do đó, ta có thể tiến hành xây dựng mô hình ANOVA.
+
+**Đồ thị thể hiện những sự tương tác hai chiều:**
+
+```{r}
+# Đồ thị thể hiện những tương tác hai chiều của các nhân tố 
+with(insurance, {
+  interaction.plot(age, sex, charges)
+  interaction.plot(age, bmi, charges)
+  interaction.plot(age, children, charges)
+  interaction.plot(age, smoker, charges)
+  interaction.plot(age, region, charges)
+  interaction.plot(sex, bmi, charges)
+  interaction.plot(sex, children, charges)
+  interaction.plot(sex, smoker, charges)
+  interaction.plot(sex, region, charges)
+  interaction.plot(bmi, children, charges)
+  interaction.plot(bmi, smoker, charges)
+  interaction.plot(bmi, region, charges)
+  interaction.plot(children, smoker, charges)
+  interaction.plot(children, region, charges)
+  interaction.plot(smoker, region, charges)
+})
+```
+
+Theo các biểu đồ interaction plot, có vẻ như không tồn tại những sự tương tác hai chiều "age" - "sex", "age" - "bmi", "age" - "smoker", "sex" - "children", "sex" - "smoker", "children" - "smoker" (đồ thị là hai đoạn thẳng song song); và có tồn tại những sự tương tác hai chiều "age" - "children", "sex" - "bmi", "bmi" - "children", "bmi" - "smoker" (đồ thị là hai đoạn thẳng hội tụ / phân kỳ) , "sex" - "region", "age" - "region", "bmi" - "region", "children" - "region", "smoker" - "region" (đồ thị là các đoạn thẳng cắt nhau). Nhận xét rằng tất cả những sự tương tác có liên quan đến nhân tố "region" có vẻ như đều tồn tại. Điều này cho thấy nhiều khả năng nhân tố "region" có ảnh hưởng lớn đến tác động của các nhân tố khác lên biến charges.
+
+**ANOVA 6 nhân tố:**
+
+Ta muốn đi trả lời các câu hỏi sau:
+
+1.  Có tồn tại sự khác biệt về chi phí bảo hiểm y tế giữa nhóm tuổi từ 18 đến dưới 40 và nhóm tuổi từ 40 đến 64 hay không?
+2.  Có tồn tại sự khác biệt về chi phí bảo hiểm y tế giữa nam và nữ hay không?
+3.  Có tồn tại sự khác biệt về chi phí bảo hiểm y tế giữa nhóm người có BMI từ 16 đến dưới 30.4 và nhóm người có BMI từ 30.4 đến 50.4 hay không?
+4.  Có tồn tại sự khác biệt về chi phí bảo hiểm y tế giữa nhóm người có 0 hoặc 1 con và nhóm người có từ 2 đến 5 con hay không?
+5.  Có tồn tại sự khác biệt về chi phí bảo hiểm y tế giữa những người có hút thuốc và không hút thuốc hay không?
+6.  Có tồn tại sự khác biệt về chi phí bảo hiểm y tế giữa những người sinh sống ở 4 vùng khác nhau hay không?
+7.  Tác động của độ tuổi / giới tính / chỉ số BMI / số con / tình trạng hút thuốc / vùng sinh sống lên chi phí bảo hiểm y tế có bị ảnh hưởng bởi sự kết hợp của các nhân tố còn lại hay không?
+
+Trong đó, 6 câu hỏi đầu tiên có thể được trả lời thông qua các kiểm định tác động chính của mô hình ANOVA:
+
+*H~0~: Không có tác động chính của nhân tố thứ i (trung bình tổng thể của biến phụ thuộc charges giữa các cấp độ của nhân tố thứ i là bằng nhau).*
+
+*H~1~: Có tác động chính của nhân tố thứ i (trung bình tổng thể của biến phụ thuộc charges giữa các cấp độ của nhân tố thứ i có sự khác nhau).*
+
+Và câu hỏi cuối cùng có thể được trả lời thông qua các kiểm định sự tương tác m chiều (với m = 2, 3, 4, 5, 6) của mô hình ANOVA:
+
+*H~0~: Không có sự tương tác giữa m nhân tố (sự khác biệt về trung bình tổng thể của biến phụ thuộc charges giữa các cấp độ của nhân tố thứ i không phụ thuộc vào tổ hợp các cấp độ của m - 1 nhân tố còn lại, hay nói cách khác, tác động của nhân tố thứ i lên biến phụ thuộc charges không phụ thuộc vào tổ hợp các cấp độ của m - 1 nhân tố còn lại).*
+
+*H~1~: Có sự tương tác giữa m nhân tố (tác động của nhân tố thứ i lên biến phụ thuộc charges phụ thuộc vào tổ hợp các cấp độ của m - 1 nhân tố còn lại)*
+
+Ta xét mô hình ANOVA với tất cả 6 nhân tố và những sự tương tác từ 2 chiều đến 6 chiều giữa các nhân tố đó:
+
+```{r}
+# ANOVA 6 nhân tố 
+mod <- aov(charges ~ .^6, data = insurance)  
+# Mô hình bao gồm tất cả các nhân tố và các yếu tố tương tác từ 2 chiều đến 6 chiều giữa các nhân tố đó
+summary(mod)
+```
+
+**Quy tắc:** (\*\*)
+
+Trong một mô hình ANOVA, những sự tương tác cần được kiểm định trước tiên (xét từ sự tương tác có số chiều cao nhất đến thấp nhất). Nếu một sự tương tác là có ý nghĩa thì ta không cần kiểm định tác động chính của các nhân tố trong sự tương tác đó, vì khi đó sự tác động của một nhân tố trong sự tương tác lên biến phụ thuộc sẽ bị ảnh hưởng bởi tổ hợp các cấp độ của các nhân tố còn lại trong sự tương tác. Chỉ khi một nhân tố không nằm trong bất kỳ sự tương tác có ý nghĩa nào thì ta mới cần kiểm định tác động chính của nó [1].
+
+[*Khi làm post hoc test:*]{.underline} Nếu một sự tương tác là có ý nghĩa thì ta chỉ cần xét sự khác biệt của trung bình biến phụ thuộc giữa các tổ hợp cấp độ của các nhân tố có trong sự tương tác đó, thay vì phải kiểm tra sự khác biệt của trung bình biến phụ thuộc giữa các cấp độ của từng nhân tố trong sự tương tác. Chỉ khi một nhân tố không nằm trong bất kỳ sự tương tác có ý nghĩa nào và tác động chính của nó là có ý nghĩa thì ta mới cần xét sự khác biệt của trung bình biến phụ thuộc giữa các cấp độ của nhân tố đó [1].
+
+**Các kiểm định cho sự tương tác:**
+
+Nay, ta cần đi kiểm định cho sự tương tác với số chiều lớn nhất (6 chiều) trước:
+
+*H~0~: Không có sự tương tác giữa 6 nhân tố (sự khác biệt về trung bình tổng thể của biến phụ thuộc charges giữa các cấp độ của nhân tố thứ i không phụ thuộc vào tổ hợp các cấp độ của 5 nhân tố còn lại, hay nói cách khác, tác động của nhân tố thứ i lên biến phụ thuộc charges không phụ thuộc vào tổ hợp các cấp độ của 5 nhân tố còn lại).*
+
+*H~1~: Có sự tương tác giữa 6 nhân tố (tác động của nhân tố thứ i lên biến phụ thuộc charges phụ thuộc vào tổ hợp các cấp độ của 5 nhân tố còn lại).*
+
+Vì p - value = 0.9004 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 6 nhân tố age, sex, bmi, children, smoker, region.
+
+Do đó, ta sẽ thử bỏ yếu tố tương tác 6 chiều không có ý nghĩa này ra khỏi mô hình:
+
+```{r}
+# ANOVA 6 factors after removing 6 way interaction
+mod <- aov(charges ~ .^5, data = insurance)  
+summary(mod)
+```
+
+Sau đó, ta đi kiểm định cho 6 sự tương tác 5 chiều, với:
+
+*H~0~: Không có sự tương tác giữa 5 nhân tố (sự khác biệt về trung bình tổng thể của biến phụ thuộc charges giữa các cấp độ của nhân tố thứ i không phụ thuộc vào tổ hợp các cấp độ của 4 nhân tố còn lại, hay nói cách khác, tác động của nhân tố thứ i lên biến phụ thuộc charges không phụ thuộc vào tổ hợp các cấp độ của 4 nhân tố còn lại).*
+
+*H~1~: Có sự tương tác giữa 5 nhân tố (tác động của nhân tố thứ i lên biến phụ thuộc charges phụ thuộc vào tổ hợp các cấp độ của 4 nhân tố còn lại).*
+
+1.  [Tương tác giữa age, sex, bmi, children, smoker:]{.underline}
+
+    Vì p - value = 0.688 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 5 nhân tố age, sex, bmi, children, smoker.
+
+2.  [Tương tác giữa age, sex, bmi, children, region:]{.underline}
+
+    Vì p - value = 0.898 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 5 nhân tố age, sex, bmi, children, region.
+
+3.  [Tương tác giữa age, sex, bmi, smoker, region:]{.underline}
+
+    Vì p - value = 0.314 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 5 nhân tố age, sex, bmi, smoker, region.
+
+4.  [Tương tác giữa age, sex, children, smoker, region:]{.underline}
+
+    Vì p - value = 0.801 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 5 nhân tố age, sex, children, smoker, region.
+
+5.  [Tương tác giữa age, bmi, children, smoker, region:]{.underline}
+
+    Vì p - value = 0.646 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 5 nhân tố age, bmi, children, smoker, region.
+
+6.  [Tương tác giữa sex, bmi, children, smoker, region:]{.underline}
+
+    Vì p - value = 0.446 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 5 nhân tố sex, bmi, children, smoker, region.
+
+Ta thấy cả 6 sự tương tác 5 chiều đều không có ý nghĩa. Do đó, ta sẽ loại những sự tương tác 5 chiều ra khỏi mô hình:
+
+```{r}
+# ANOVA 6 factors after removing 5 way and 6 way interactions
+mod <- aov(charges ~ .^4, data = insurance)  
+summary(mod)
+```
+
+Tiếp theo, ta đi kiểm định cho 15 sự tương tác 4 chiều, với:
+
+*H~0~: Không có sự tương tác giữa 4 nhân tố (sự khác biệt về trung bình tổng thể của biến phụ thuộc charges giữa các cấp độ của nhân tố thứ i không phụ thuộc vào tổ hợp các cấp độ của 3 nhân tố còn lại, hay nói cách khác, tác động của nhân tố thứ i lên biến phụ thuộc charges không phụ thuộc vào tổ hợp các cấp độ của 3 nhân tố còn lại).*
+
+*H~1~: Có sự tương tác giữa 4 nhân tố (tác động của nhân tố thứ i lên biến phụ thuộc charges phụ thuộc vào tổ hợp các cấp độ của 3 nhân tố còn lại).*
+
+1.  [Tương tác giữa age, sex, bmi, children:]{.underline}
+
+    Vì p - value = 0.385 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 4 nhân tố age, sex, bmi, children.
+
+2.  [Tương tác giữa age, sex, bmi, smoker:]{.underline}
+
+    Vì p - value = 0.991 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 4 nhân tố age, sex, bmi, smoker.
+
+3.  [Tương tác giữa age, sex, bmi, region:]{.underline}
+
+    Vì p - value = 0.624 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 4 nhân tố age, sex, bmi, region.
+
+4.  [Tương tác giữa age, sex, children, smoker:]{.underline}
+
+    Vì p - value = 0.879 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 4 nhân tố age, sex, children, smoker.
+
+5.  [Tương tác giữa age, sex, children, region:]{.underline}
+
+    Vì p - value = 0.728 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 4 nhân tố age, sex, children, region.
+
+6.  [Tương tác giữa age, sex, smoker, region:]{.underline}
+
+    Vì p - value = 0.176 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 4 nhân tố age, sex, smoker, region.
+
+7.  [Tương tác giữa age, bmi, children, smoker:]{.underline}
+
+    mVì p - value = 0.269 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 4 nhân tố age, bmi, children, smoker.
+
+8.  [Tương tác giữa age, bmi, children, region:]{.underline}
+
+    Vì p - value = 0.810 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 4 nhân tố age, bmi, children, region.
+
+9.  [Tương tác giữa age, bmi, smoker, region:]{.underline}
+
+    Vì p - value = 0.935 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 4 nhân tố age, bmi, smoker, region.
+
+10. [Tương tác giữa age, children, smoker, region:]{.underline}
+
+    Vì p - value = 0.846 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 4 nhân tố age, children, smoker, region.
+
+11. [Tương tác giữa sex, bmi, children, smoker:]{.underline}
+
+    Vì p - value = 0.335 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 4 nhân tố sex, bmi, children, smoker.
+
+12. [Tương tác giữa sex, bmi, children, region:]{.underline}
+
+    Vì p - value = 0.081 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 4 nhân tố sex, bmi, children, region.
+
+13. [Tương tác giữa sex, bmi, smoker, region:]{.underline}
+
+    Vì p - value = 0.266 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 4 nhân tố sex, bmi, smoker, region.
+
+14. [Tương tác giữa sex, children, smoker, region:]{.underline}
+
+    Vì p - value = 0.783 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 4 nhân tố sex, children, smoker, region.
+
+15. [Tương tác giữa bmi, children, smoker, region:]{.underline}
+
+    Vì p - value = 0.981 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 4 nhân tố bmi, children, smoker, region.
+
+Ta thấy cả 15 sự tương tác 4 chiều đều không có ý nghĩa. Do đó, ta sẽ loại những sự tương tác 4 chiều ra khỏi mô hình:
+
+```{r}
+# ANOVA 6 factors after removing 4 way, 5 way and 6 way interactions 
+mod <- aov(charges ~ .^3, data = insurance)  
+summary(mod)
+```
+
+Sau đó, ta đi kiểm định cho 20 sự tương tác 3 chiều, với:
+
+*H~0~: Không có sự tương tác giữa 3 nhân tố (sự khác biệt về trung bình tổng thể của biến phụ thuộc charges giữa các cấp độ của nhân tố thứ i không phụ thuộc vào tổ hợp các cấp độ của 2 nhân tố còn lại, hay nói cách khác, tác động của nhân tố thứ i lên biến phụ thuộc charges không phụ thuộc vào tổ hợp các cấp độ của 2 nhân tố còn lại).*
+
+*H~1~: Có sự tương tác giữa 3 nhân tố (tác động của nhân tố thứ i lên biến phụ thuộc charges phụ thuộc vào tổ hợp các cấp độ của 2 nhân tố còn lại).*
+
+1.  [Tương tác giữa age, sex, bmi:]{.underline}
+
+    Vì p - value = 0.357 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 3 nhân tố age, sex, bmi.
+
+2.  [Tương tác giữa age, sex, children:]{.underline}
+
+    Vì p - value = 0.838 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 3 nhân tố age, sex, children.
+
+3.  [Tương tác giữa age, sex, smoker:]{.underline}
+
+    Vì p - value = 0.184 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 3 nhân tố age, sex, smoker.
+
+4.  [Tương tác giữa age, sex, region:]{.underline}
+
+    Vì p - value = 0.579 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 3 nhân tố age, sex, region.
+
+5.  [Tương tác giữa age, bmi, children:]{.underline}
+
+    Vì p - value = 0.233 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 3 nhân tố age, bmi, children.
+
+6.  [Tương tác giữa age, bmi, smoker:]{.underline}
+
+    mVì p - value = 0.585 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 3 nhân tố age, bmi, smoker.
+
+7.  [Tương tác giữa age, bmi, region:]{.underline}
+
+    Vì p - value = 0.699 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 3 nhân tố age, bmi, region.
+
+8.  [Tương tác giữa age, children, smoker:]{.underline}
+
+    Vì p - value = 0.292 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 3 nhân tố age, children, smoker.
+
+9.  [Tương tác giữa age, children, region:]{.underline}
+
+    Vì p - value = 0.293 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 3 nhân tố age, children, region.
+
+10. [Tương tác giữa age, smoker, region:]{.underline}
+
+    Vì p - value = 0.358 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 3 nhân tố age, smoker, region.
+
+11. [Tương tác giữa sex, bmi, children:]{.underline}
+
+    Vì p - value = 0.243 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 3 nhân tố sex, bmi, children.
+
+12. [Tương tác giữa sex, bmi, smoker:]{.underline}
+
+    Vì p - value = 0.425 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 3 nhân tố sex, bmi, smoker.
+
+13. [Tương tác giữa sex, bmi, region:]{.underline}
+
+    Vì p - value = 0.314 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 3 nhân tố sex, bmi, region.
+
+14. [Tương tác giữa sex, children, smoker:]{.underline}
+
+    Vì p - value = 0.501 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 3 nhân tố sex, children, smoker.
+
+15. [Tương tác giữa sex, children, region:]{.underline}
+
+    Vì p - value = 0.913 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 3 nhân tố sex, children, region.
+
+16. [Tương tác giữa sex, smoker, region:]{.underline}
+
+    Vì p - value = 0.204 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 3 nhân tố sex, smoker, region.
+
+17. [Tương tác giữa bmi, children, smoker:]{.underline}
+
+    Vì p - value = 0.266 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 3 nhân tố bmi, children, smoker.
+
+18. [Tương tác giữa bmi, children, region]{.underline}
+
+    Vì p - value = 0.867 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 3 nhân tố bmi, children, region.
+
+19. [Tương tác giữa bmi, smoker, region:]{.underline}
+
+    Vì p - value = 0.960 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 3 nhân tố bmi, smoker, region.
+
+20. [Tương tác giữa children, smoker, region:]{.underline}
+
+    Vì p - value = 0.769 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 3 nhân tố children, smoker, region.
+
+Ta thấy cả 20 sự tương tác 3 chiều đều không có ý nghĩa. Do đó, ta sẽ loại những sự tương tác 3 chiều ra khỏi mô hình:
+
+```{r}
+# ANOVA 6 factors after removing 3 way, 4 way, 5 way and 6 way interactions 
+mod <- aov(charges ~ .^2, data = insurance)  
+summary(mod)
+```
+
+Tiếp theo, ta đi kiểm định cho 15 sự tương tác 2 chiều, với:
+
+*H~0~: Không có sự tương tác giữa 2 nhân tố (sự khác biệt về trung bình tổng thể của biến phụ thuộc charges giữa các cấp độ của nhân tố thứ i không phụ thuộc vào cấp độ của nhân tố còn lại, hay nói cách khác, tác động của nhân tố thứ i lên biến phụ thuộc charges không phụ thuộc vào cấp độ của nhân tố còn lại).*
+
+*H~1~: Có sự tương tác giữa 2 nhân tố (tác động của nhân tố thứ i lên biến phụ thuộc charges phụ thuộc vào cấp độ của nhân tố còn lại).*
+
+1.  [Tương tác giữa age, sex:]{.underline}
+
+    Vì p - value = 0.756 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 2 nhân tố age, sex.
+
+2.  [Tương tác giữa age, bmi]{.underline}
+
+    Vì p - value = 0.978 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 2 nhân tố age, bmi.
+
+3.  [Tương tác giữa age, children:]{.underline}
+
+    Vì p - value = 0.0002 \< 0.05 nên ta bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, có tồn tại sự tương tác giữa 2 nhân tố age, children.
+
+4.  [Tương tác giữa age, smoker:]{.underline}
+
+    Vì p - value = 0.358 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 2 nhân tố age, smoker.
+
+5.  [Tương tác giữa age, region:]{.underline}
+
+    Vì p - value = 0.738 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 2 nhân tố age, region.
+
+6.  [Tương tác giữa sex, bmi:]{.underline}
+
+    Vì p - value = 0.033 \< 0.05 nên ta bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, có tồn tại sự tương tác giữa 2 nhân tố sex, bmi.
+
+7.  [Tương tác giữa sex, children:]{.underline}
+
+    Vì p - value = 0.945 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 2 nhân tố sex, children.
+
+8.  [Tương tác giữa sex, smoker:]{.underline}
+
+    Vì p - value = 5.55 x 10^-5^ \< 0.05 nên ta bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, có tồn tại sự tương tác giữa 2 nhân tố sex, smoker.
+
+9.  [Tương tác giữa sex, region:]{.underline}
+
+    Vì p - value = 0.747 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 2 nhân tố sex, region.
+
+10. [Tương tác giữa bmi, children:]{.underline}
+
+    Vì p - value = 0.025 \< 0.05 nên ta bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, có tồn tại sự tương tác giữa 2 nhân tố bmi, children.
+
+11. [Tương tác giữa bmi, smoker:]{.underline}
+
+    Vì p - value \< 2 x 10^-16^ \< 0.05 nên ta bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, có tồn tại sự tương tác giữa 2 nhân tố bmi, smoker.
+
+12. [Tương tác giữa bmi, region:]{.underline}
+
+    Vì p - value = 0.805 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 2 nhân tố bmi, region.
+
+13. [Tương tác giữa children, smoker:]{.underline}
+
+    Vì p - value = 0.055 \< 0.06 nên ta bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, có tồn tại sự tương tác giữa 2 nhân tố children, smoker.
+
+14. [Tương tác giữa children, region:]{.underline}
+
+    Vì p - value = 0.544 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, không có sự tương tác giữa 2 nhân tố children, region.
+
+15. [Tương tác giữa smoker, region:]{.underline}
+
+    Vì p - value = 0.029 \< 0.05 nên ta bác bỏ H~0~ với mức ý nghĩa 0.05. Do đó, có tồn tại sự tương tác giữa 2 nhân tố smoker, region.
+
+Ta thấy chỉ có 7 sự tương tác 2 chiều là có ý nghĩa, bao gồm sự tương tác giữa 2 nhân tố "age" - "children", "sex" - "bmi", "sex" - "smoker", "bmi" - "children", "bmi" - "smoker", "children" - "smoker" và giữa "smoker" - "region". Do đó, ta loại bỏ những sự tương tác 2 chiều không có ý nghĩa ra khỏi mô hình:
+
+```{r}
+# ANOVA 6 factors after removing some 2 way and all 3 way, 4 way, 5 way and 6 way interactions
+mod_aov <- aov(charges ~ . + age:children + sex:bmi + sex:smoker + bmi:children + bmi:smoker + children:smoker + smoker:region, data = insurance) 
+summary(mod_aov)
+```
+
+**Các kiểm định cho tác động chính:**
+
+Theo Quy tắc (\*\*), vì cả 6 nhân tố đều nằm trong ít nhất một sự tương tác 2 chiều có ý nghĩa nên ta không cần kiểm định tác động chính của từng nhân tố.
+
+Như vậy, ta đã hoàn thành việc kiểm định cho những tác động chính và sự tương tác của các nhân tố. Lúc này, mô hình của chúng ta chỉ còn lại 6 nhân tố và 7 sự tương tác 2 chiều: "age" - "children", "sex" - "bmi", "sex" - "smoker", "bmi" - "children", "bmi" - "smoker", "children" - "smoker" và "smoker" - "region".
+
+**Nhận xét:**
+
+1.  Tác động của độ tuổi lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi số con của người đó và ngược lại, tác động của số con lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi độ tuổi của người đó (vì có sự tương tác giữa 2 nhân tố "age" và "children").
+2.  Tác động của giới tính lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi chỉ số BMI của người đó và ngược lại, tác động của chỉ số BMI lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi giới tính của người đó (vì có sự tương tác giữa 2 nhân tố "sex" và "bmi").
+3.  Tác động của giới tính lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi tình trạng hút thuốc của người đó và ngược lại, tác động của tình trạng hút thuốc lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi giới tính của người đó (vì có sự tương tác giữa 2 nhân tố "sex" và "smoker").
+4.  Tác động của chỉ số BMI lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi số con của người đó và ngược lại, tác động của số con lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi chỉ số BMI của người đó (vì có sự tương tác giữa 2 nhân tố "bmi" và "children").
+5.  Tác động của chỉ số BMI lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi tình trạng hút thuốc của người đó và ngược lại, tác động của tình trạng hút thuốc lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi chỉ số BMI của người đó (vì có sự tương tác giữa 2 nhân tố "bmi" và "smoker").
+6.  Tác động của số con lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi tình trạng hút thuốc của người đó và ngược lại, tác động của tình trạng hút thuốc lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi số con của người đó (vì có sự tương tác giữa 2 nhân tố "children" và "smoker").
+7.  Tác động của tình trạng hút thuốc lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi vùng sinh sống của người đó và ngược lại, tác động của vùng sinh sống lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi tình trạng hút thuốc của người đó (vì có sự tương tác giữa 2 nhân tố "smoker" và "region").
+
+### Post hoc test:
+
+Kết quả ANOVA không chỉ ra rằng trung bình biến charges khác nhau giữa các nhóm nào của thiết kế thí nghiệm. Và để kiểm tra điều này, ở đây ta sẽ sử dụng post hoc test Tukey's HSD.
+
+Vì cả 6 nhân tố đều nằm trong ít nhất một sự tương tác 2 chiều có ý nghĩa nên theo Quy tắc (\*\*), thay vì đi kiểm tra sự khác biệt của trung bình biến charges giữa các cấp độ của từng nhân tố:
+
+```{r}
+## Tukey's HSD để kiểm tra sự khác biệt của trung bình biến charges giữa các cấp độ của từng nhân tố (không cần làm)
+# TukeyHSD(mod, which = 'age', conf.level=.95, console=TRUE)  
+# TukeyHSD(mod, which = 'sex', conf.level=.95, console=TRUE)  
+# TukeyHSD(mod, which = 'bmi', conf.level=.95, console=TRUE)  
+# TukeyHSD(mod, which = 'children', conf.level=.95, console=TRUE)  
+# TukeyHSD(mod, which = 'smoker', conf.level=.95, console=TRUE)  
+# TukeyHSD(mod, which = 'region', conf.level=.95, console=TRUE)  
+```
+
+thì ta đi xét sự khác biệt của trung bình biến phụ thuộc giữa các tổ hợp cấp độ của các nhân tố có trong từng sự tương tác:
+
+Xét sự tương tác 2 chiều giữa 2 nhân tố A và B. Gọi (i, j) là nhóm gồm cấp độ i của nhân tố A và cấp độ j của nhân tố B; (h, l) là nhóm gồm cấp độ h của nhân tố A và cấp độ l của nhân tố B, với $(i,j) \neq (h,l)$ *.* Kiểm định Tukey's HSD cho sự khác biệt của trung bình biến charges giữa nhóm (i, j) và nhóm (h, l) có:
+
+*H~0~ : Không có sự khác biệt về trung bình của biến charges giữa nhóm (i, j) và nhóm (h, l).*
+
+*H~1~ : Có sự khác biệt về trung bình của biến charges giữa nhóm (i, j) và nhóm (h, l).*
+
+Đồng thời, nhìn vào cột diff của kết quả hàm TukeyHSD(), nếu tại dòng (i : j) - (h : l) có giá trị là dương thì tức là trung bình biến charges ứng với nhóm (i : j) sẽ cao hơn là ứng với nhóm (h : l) và ngược lại.
+
+```{r}
+## Tukey's HSD để xét sự khác biệt của trung bình biến phụ thuộc giữa các tổ hợp cấp độ của các nhân tố có trong từng sự tương tác
+TukeyHSD(mod_aov, which = 'age:children', conf.level=.95, console=TRUE)  
+```
+
+Xét sự tương tác 2 chiều giữa "age" và "children":
+
+-   Khi i = [40,64], j = [0,2), h = [18,40), l =[0,2):]{.underline}
+
+    Vì p - value = 0 \< 0.05 nên ta bác bỏ H~0~ với mức ý nghĩa 0.05. Và ta kết luận rằng có sự khác biệt về trung bình của biến charges giữa nhóm (i, j) và nhóm (h, l). Cụ thể, trung bình biến charges ứng với nhóm (i, j) cao hơn là ứng với nhóm (h, l).
+
+-   Khi i = [18,40), j = [2,5], h = [18,40), l =[0,2):]{.underline}
+
+    Vì p - value = 0 \< 0.05 nên ta bác bỏ H~0~ với mức ý nghĩa 0.05. Và ta kết luận rằng có sự khác biệt về trung bình của biến charges giữa nhóm (i, j) và nhóm (h, l). Cụ thể, trung bình biến charges ứng với nhóm (i, j) cao hơn là ứng với nhóm (h, l).
+
+-   Khi i = [40,64), j = [2,5], h = [18,40), l =[0,2):]{.underline}
+
+    Vì p - value = 0 \< 0.05 nên ta bác bỏ H~0~ với mức ý nghĩa 0.05. Và ta kết luận rằng có sự khác biệt về trung bình của biến charges giữa nhóm (i, j) và nhóm (h, l). Cụ thể, trung bình biến charges ứng với nhóm (i, j) cao hơn là ứng với nhóm (h, l).
+
+-   Khi i = [18,40), j = [2,5], h = [40,64], l =[0,2):]{.underline}
+
+    Vì p - value = 0 \< 0.05 nên ta bác bỏ H~0~ với mức ý nghĩa 0.05. Và ta kết luận rằng có sự khác biệt về trung bình của biến charges giữa nhóm (i, j) và nhóm (h, l). Cụ thể, trung bình biến charges ứng với nhóm (i, j) thấp hơn là ứng với nhóm (h, l).
+
+-   Khi i = [40,64], j = [2,5], h = [40,64], l = [0,2):]{.underline}
+
+    Vì p - value = 0.030 \< 0.05 nên ta bác bỏ H~0~ với mức ý nghĩa 0.05. Và ta kết luận rằng có sự khác biệt về trung bình của biến charges giữa nhóm (i, j) và nhóm (h, l). Cụ thể, trung bình biến charges ứng với nhóm (i, j) cao hơn là ứng với nhóm (h, l).
+
+-   Khi i = [40,64), j = [2,5], h = [18,40), l =[2,5):]{.underline}
+
+    Vì p - value = 0 \< 0.05 nên ta bác bỏ H~0~ với mức ý nghĩa 0.05. Và ta kết luận rằng có sự khác biệt về trung bình của biến charges giữa nhóm (i, j) và nhóm (h, l). Cụ thể, trung bình biến charges ứng với nhóm (i, j) cao hơn là ứng với nhóm (h, l).
+
+Như vậy, có sự khác biệt về trung bình biến charges giữa tất cả các tổ hợp cấp độ của hai nhân tố "age" và "children".
+
+```{r}
+TukeyHSD(mod_aov, which = 'sex:bmi', conf.level=.95, console=TRUE) 
+```
+
+Xét sự tương tác 2 chiều giữa "sex" và "bmi":
+
+Làm tương tự như trên, ta được kết quả là:
+
+Có sự khác biệt về trung bình biến charges giữa tất cả các tổ hợp cấp độ của hai nhân tố "sex" và "bmi", ngoại trừ giữa tổ hợp (sex = male, bmi = [16.0, 30.4)) và tổ hợp (sex = female, bmi = [16.0, 30.4)).
+
+```{r}
+TukeyHSD(mod_aov, which = 'sex:smoker', conf.level=.95, console=TRUE) 
+```
+
+Xét sự tương tác 2 chiều giữa "sex" và "smoker":
+
+Làm tương tự như trên, ta được kết quả là:
+
+Có sự khác biệt về trung bình biến charges giữa tất cả các tổ hợp cấp độ của hai nhân tố "sex" và "smoker", ngoại trừ giữa tổ hợp (sex = male, smoker = no) và tổ hợp (sex = female, smoker = no).
+
+```{r}
+TukeyHSD(mod_aov, which = 'bmi:children', conf.level=.95, console=TRUE) 
+```
+
+Xét sự tương tác 2 chiều giữa "bmi" và "children":
+
+Làm tương tự như trên, ta được kết quả là:
+
+Có sự khác biệt về trung bình biến charges giữa tất cả các tổ hợp cấp độ của hai nhân tố "bmi" và "children".
+
+```{r}
+TukeyHSD(mod_aov, which = 'bmi:smoker', conf.level=.95, console=TRUE) 
+```
+
+Xét sự tương tác 2 chiều giữa "bmi" và "smoker":
+
+Làm tương tự như trên, ta được kết quả là:
+
+Có sự khác biệt về trung bình biến charges giữa tất cả các tổ hợp cấp độ của hai nhân tố "bmi" và "smoker", ngoại trừ giữa tổ hợp (bmi = [30.4, 50.4], smoker = no) và tổ hợp (bmi = [16.0, 30.4), smoker = no).
+
+```{r}
+TukeyHSD(mod_aov, which = 'children:smoker', conf.level=.95, console=TRUE) 
+```
+
+Xét sự tương tác 2 chiều giữa "children" và "smoker":
+
+Làm tương tự như trên, ta được kết quả là:
+
+Có sự khác biệt về trung bình biến charges giữa tất cả các tổ hợp cấp độ của hai nhân tố "children" và "smoker", ngoại trừ giữa tổ hợp (children = [2, 5], smoker = yes) và tổ hợp (children = [0, 2), smoker = yes).
+
+```{r}
+TukeyHSD(mod_aov, which = 'smoker:region', conf.level=.95, console=TRUE) 
+```
+
+Xét sự tương tác 2 chiều giữa "smoker" và "region":
+
+Làm tương tự như trên, ta được kết quả là:
+
+Có sự khác biệt về trung bình biến charges giữa:
+
+1.  Tổ hợp (smoker = yes, region = northeast) và tổ hợp (smoker = no, region = northeast).
+2.  Tổ hợp (smoker = yes, region = northwest) và tổ hợp (smoker = no, region = northeast).
+3.  Tổ hợp (smoker = yes, region = southeast) và tổ hợp (smoker = no, region = northeast).
+4.  Tổ hợp (smoker = yes, region = southwest) và tổ hợp (smoker = no, region = northeast).
+5.  Tổ hợp (smoker = no, region = northwest) và tổ hợp (smoker = yes, region = northeast).
+6.  Tổ hợp (smoker = no, region = southeast) và tổ hợp (smoker = yes, region = northeast).
+7.  Tổ hợp (smoker = no, region = southwest) và tổ hợp (smoker = yes, region = northeast).
+8.  Tổ hợp (smoker = yes, region = northwest) và tổ hợp (smoker = no, region = northwest).
+9.  Tổ hợp (smoker = yes, region = southeast) và tổ hợp (smoker = no, region = northwest).
+10. Tổ hợp (smoker = yes, region = southwest) và tổ hợp (smoker = no, region = northwest).
+11. Tổ hợp (smoker = no, region = southeast) và tổ hợp (smoker = yes, region = northwest).
+12. Tổ hợp (smoker = no, region = southwest) và tổ hợp (smoker = yes, region = northwest).
+13. Tổ hợp (smoker = yes, region = southeast) và tổ hợp (smoker = no, region = southeast).
+14. Tổ hợp (smoker = yes, region = southwest) và tổ hợp (smoker = no, region = southeast).
+15. Tổ hợp (smoker = no, region = southwest) và tổ hợp (smoker = yes, region = southeast).
+16. Tổ hợp (smoker = yes, region = southwest) và tổ hợp (smoker = no, region = southwest).
+
+Nhìn chung, có sự khác biệt về trung bình biến charges giữa hầu hết các tổ hợp cấp độ của hai nhân tố "smoker" và "region".
+
+**Nhận xét:**
+
+-   Chi phí bảo hiểm y tế của một người có sự khác biệt giữa mọi tổ hợp cấp độ của độ tuổi và số con của người đó.
+
+-   Chi phí bảo hiểm y tế của một người có sự khác biệt giữa mọi tổ hợp cấp độ của giới tính và chỉ số BMI của người đó, ngoại từ giữa tổ hợp "nam với chỉ số BMI từ 16 đến dưới 30.4" và tổ hợp "nữ với chỉ số BMI từ 16 đến dưới 30.4".
+
+-   Chi phí bảo hiểm y tế của một người có sự khác biệt giữa mọi tổ hợp cấp độ của giới tính và tình trạng hút thuốc của người đó, ngoại từ giữa tổ hợp "nam không hút thuốc" và tổ hợp "nữ không hút thuốc".
+
+-   Chi phí bảo hiểm y tế của một người có sự khác biệt giữa mọi tổ hợp cấp độ của chỉ số BMI và số con của người đó.
+
+-   Chi phí bảo hiểm y tế của một người có sự khác biệt giữa mọi tổ hợp cấp độ của chỉ số BMI và tình trạng hút thuốc của người đó, ngoại từ giữa tổ hợp "người có chỉ số BMI từ 30.4 đến 50.4 và không hút thuốc" và tổ hợp "người có chỉ số BMI từ 16 đến dưới 30.4 và không hút thuốc".
+
+-   Chi phí bảo hiểm y tế của một người có sự khác biệt giữa mọi tổ hợp cấp độ của số con và tình trạng hút thuốc của người đó, ngoại từ giữa tổ hợp "người có từ 2 đến 5 con và có hút thuốc" và tổ hợp "người không có con hoặc có 1 con và có hút thuốc".
+
+-   Chi phí bảo hiểm y tế của một người có sự khác biệt giữa hầu hết các tổ hợp cấp độ của tình trạng hút thuốc và vùng sinh sống của người đó.
+
+### (c) Đưa ra mô hình được xét và kiểm tra các giả định của mô hình:
+
+Mô hình mà ta xét là mô hình mod_aov:
+
+```{r}
+summary(mod_aov)
+```
+
+**Kiểm tra các giả định của mô hình:**
+
+```{r}
+# Kiểm tra giả định mô hình 
+plot(mod_aov, 2)
+plot(mod_aov, 3)
+```
+
+Từ biểu đồ Q - Q plot của các giá trị thặng dư, ta thấy có nhiều điểm nằm xa đường thẳng. Do đó, có vẻ như mô hình đang không thỏa giả định về tính chuẩn.
+
+Từ biểu đồ vẽ căn bậc hai của giá trị thặng dư theo giá trị ước lượng, có thể thấy đường màu đỏ nằm tương đối ngang, và các điểm trên biểu đồ phân bố khá đều xung quanh đường màu đỏ. Do đó, có vẻ như mô hình thỏa giả định về tính ổn định phương sai.
+
+Nay ta đi kiểm tra lại giả định về tính chuẩn và tính ổn định phương sai bằng các kiểm định:
+
+```{r}
+# Kiểm định Shapiro - Wilk 
+shapiro.test(resid(mod_aov))
+```
+
+Kiểm định Shapiro - Wilk có:
+
+H~0~ : Các sai số cùng tuân theo phân phối chuẩn.
+
+H~1~ : Các sai số không cùng tuân theo phân phối chuẩn.
+
+Ở đây, vì p - value \< 2.2 x 10^-16^ \< 0.05 nên ta bác bỏ H~0~ với mức ý nghĩa 0.05. Và ta kết luận rằng mô hình không thỏa giả định về tính chuẩn.
+
+```{r}
+# Kiểm định Levene's Test 
+leveneTest(charges ~ .^2 - age:sex - age:smoker - age:bmi - age:region - sex:children - sex:region - bmi:region - children:region, data = insurance)
+```
+
+Kiểm định Levene's Test có:
+
+H~0~ : Phương sai của các nhóm bằng nhau.
+
+H~1~ : Phương sai của các nhóm không bằng nhau.
+
+Ở đây, vì p - value = 0.995 \> 0.05 nên ta chưa đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Và ta kết luận rằng mô hình thỏa giả định về tính ổn định phương sai.
+
+Như vậy, mô hình của chúng ta đang không thỏa giả định về tính chuẩn nên ta sẽ biến đổi biến phụ thuộc "charges". Đồng thời, vì biến "charges" chỉ có các giá trị dương nên ta sẽ áp dụng phương pháp Box - Cox để biến đổi biến:
+
+```{r}
+# Biến đổi biến bằng Box - Cox 
+summary(powerTransform(mod_aov))
+```
+
+Khi làm tròn cột Est Power trong kết quả hàm summary(), ta được giá trị $\lambda$ cho biến "charges" là : $\lambda = 0.33$. Ta đi kiểm định:
+
+*H~0~ : Thực hiện phép biến đổi theo* $\lambda = 0.33$ *là cần thiết.*
+
+*H~1~ : Thực hiện phép biến đổi theo* $\lambda = 0.33$ *là không cần thiết.*
+
+```{r}
+# Kiểm định cho sự biến đổi biến 
+testTransform(powerTransform(mod_aov), 0.33)
+```
+
+Vì p - value = 0.456 \> 0.05 nên ta không đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05, và kết luận rằng phép biến đổi theo $\lambda = 0.33$ là phù hợp. Ta có mô hình sau khi biến đổi là:
+
+```{r}
+# Mô hình sau khi biến đổi biến 
+mod_trans <- aov((charges^(0.33)-1)/(0.33) ~ . + age:children + sex:bmi + sex:smoker + bmi:children + bmi:smoker + children:smoker + smoker:region, data = insurance)
+summary(mod_trans)
+```
+
+Nay, ta kiểm tra lại các giả định của mô hình:
+
+```{r}
+# Kiểm tra lại giả định mô hình 
+plot(mod_trans,2)  
+plot(mod_trans,3)
+```
+
+Từ biểu đồ Q - Q plot của các giá trị thặng dư, ta thấy vẫn có nhiều điểm nằm xa đường thẳng. Do đó, có vẻ như mô hình vẫn đang không thỏa giả định về tính chuẩn.
+
+Từ biểu đồ vẽ căn bậc hai của giá trị thặng dư theo giá trị ước lượng, có thể thấy đường màu đỏ nằm tương đối ngang, và các điểm trên biểu đồ phân bố khá đều xung quanh đường màu đỏ. Do đó, có vẻ như mô hình thỏa giả định về tính ổn định phương sai.
+
+```{r}
+# Kiểm định Shapiro - Wilk 
+shapiro.test(resid(mod_trans))  
+```
+
+Kiểm định Shapiro - Wilk có:
+
+H~0~ : Các sai số cùng tuân theo phân phối chuẩn.
+
+H~1~ : Các sai số không cùng tuân theo phân phối chuẩn.
+
+Ở đây, vì p - value \< 2.2 x 10^-16^\< 0.05 nên ta bác bỏ H~0~ với mức ý nghĩa 0.05. Và ta kết luận rằng mô hình không thỏa giả định về tính chuẩn.
+
+```{r}
+# Kiểm định Levene's Test 
+leveneTest((charges^(0.33)-1)/(0.33) ~ .^2 - age:sex - age:smoker - age:bmi - age:region - sex:children - sex:region - bmi:region - children:region , data = insurance)
+```
+
+Kiểm định Levene's Test có:
+
+H~0~ : Phương sai của các nhóm bằng nhau.
+
+H~1~ : Phương sai của các nhóm không bằng nhau.
+
+Ở đây, vì p - value = 0.265 \> 0.05 nên ta chưa đủ cơ sở để bác bỏ H~0~ với mức ý nghĩa 0.05. Và ta kết luận rằng mô hình thỏa giả định về tính ổn định phương sai.
+
+Ta thấy rằng sau khi biến đổi biến thì mô hình vẫn không thỏa giả định về tính chuẩn, thậm chí p - value của kiểm định Levene's Test cho tính ổn định phương sai còn bị giảm. Do đó, ta kết luận rằng mô hình trước khi biến đổi biến mod_aov là mô hình ANOVA tốt nhất để phân tích ảnh hưởng của các nhân tố lên biến "charges".
+
+### (d) Đề xuất những phương pháp cải tiến / phân tích khác có thể cho kết quả tốt hơn:
+
+Đầu tiên, vì giả định về phân phối chuẩn không thỏa nên thay vì dùng ANOVA thì ta có thể thử sử dụng mô hình GLM (mô hình tuyến tính tổng quát) để biểu diễn mối liên hệ giữa biến phụ thuộc charges và các biến độc lập, vì mô hình GLM không yêu cầu giả định về tính chuẩn hay giả định về tính ổn định phương sai. Tuy nhiên, lưu ý rằng mô hình GLM cần thỏa giả định về tính tuyến tính như sau: *"Tồn tại mối quan hệ tuyến tính giữa biến phụ thuộc sau khi được biến đổi theo hàm liên kết với các biến độc lập."* (giả định này khác với giả định về tính tuyến tính trong mô hình hồi quy tuyến tính)
+
+Thứ hai, thay vì dùng ANOVA thì ta cũng có thể xem xét sử dụng các phương pháp phi tham số. Hiện tại, chưa có phương pháp phi tham số nào được xem là tương đương với phương pháp ANOVA k nhân tố ($k \geq 3$). Tuy nhiên, ta có thể kết hợp sử dụng một số phương pháp phi tham số rồi so sánh lại kết quả với phương pháp ANOVA k nhân tố, ví dụ như:
+
+1.  Kiểm định Kruskal-Wallis (tương đương với phương pháp ANOVA 1 nhân tố):
+
+    H~0~ : Không có sự khác biệt về trung bình hạng giữa các nhóm.
+
+    H~1~ : Có sự khác biệt về trung bình hạng giữa các nhóm.
+
+    [Ghi chú:]{.underline} Trong kiểm định phi tham số, dữ liệu thường được xếp hạng, sau đó mỗi quan trắc trong từng nhóm sẽ được gán một hạng. Và trung bình hạng của mỗi nhóm sẽ chính là trung bình các hạng của các quan trắc trong nhóm đó.
+
+2.  Phương pháp ANCOVA:
+
+    Mô hình ANCOVA có bao gồm cả các nhân tố và biến số liên tục, giúp kiểm soát tác động của các biến số liên tục nhằm tách biệt được tác động của các nhân tố lên biến phụ thuộc. Ở đây, vì trong bộ dữ liệu insurance có một vài biến số liên tục nên ta có thể thử sử dụng phương pháp ANCOVA.
+
+### Kết luận:
+
+Từ kết quả phân tích ANOVA k nhân tố, ta có:
+
+-   Ta đã loại bỏ các giá trị ngoại lai ra khỏi mô hình trước khi thực hiện ANOVA. Ngoài ra, ta cũng đã chia cấp độ cho các biến định lượng trước khi chuyển chúng về dạng nhân tố để thực hiện ANOVA.
+-   Mô hình tốt nhất được chọn là mô hình *mod_aov,* giải thích biến "charges" theo 6 nhân tố và 7 sự tương tác 2 chiều ("age" - "children", "sex" - "bmi", "sex" - "smoker", "bmi" - "children", "bmi" - "smoker", "children" - "smoker" và "smoker" - "region").
+-   Các nhân tố đều tồn tại trong ít nhất 1 sự tương tác 2 chiều có ý nghĩa nên ta không cần kiểm định tác động chính của từng nhân tố.
+-   Ta đã đưa ra được những nhận xét về ảnh hưởng của các nhân tố lên chi phí bảo hiểm y tế:
+    1.  Tác động của độ tuổi lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi số con của người đó và ngược lại, tác động của số con lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi độ tuổi của người đó.
+    2.  Tác động của giới tính lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi chỉ số BMI của người đó và ngược lại, tác động của chỉ số BMI lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi giới tính của người đó.
+    3.  Tác động của giới tính lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi tình trạng hút thuốc của người đó và ngược lại, tác động của tình trạng hút thuốc lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi giới tính của người đó.
+    4.  Tác động của chỉ số BMI lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi số con của người đó và ngược lại, tác động của số con lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi chỉ số BMI của người đó.
+    5.  Tác động của chỉ số BMI lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi tình trạng hút thuốc của người đó và ngược lại, tác động của tình trạng hút thuốc lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi chỉ số BMI của người đó.
+    6.  Tác động của số con lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi tình trạng hút thuốc của người đó và ngược lại, tác động của tình trạng hút thuốc lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi số con của người đó.
+    7.  Tác động của tình trạng hút thuốc lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi vùng sinh sống của người đó và ngược lại, tác động của vùng sinh sống lên chi phí bảo hiểm y tế của một người có bị ảnh hưởng bởi tình trạng hút thuốc của người đó.
+-   Đồng thời, ta cũng kiểm tra được sự khác biệt của chi phí bảo hiểm y tế giữa các tổ hợp cấp độ của các nhân tố trong những sự tương tác 2 chiều thông qua post hoc test (Tukey's HSD):
+    1.  Chi phí bảo hiểm y tế của một người có sự khác biệt giữa mọi tổ hợp cấp độ của độ tuổi và số con của người đó.
+    2.  Chi phí bảo hiểm y tế của một người có sự khác biệt giữa mọi tổ hợp cấp độ của giới tính và chỉ số BMI của người đó, ngoại từ giữa tổ hợp "nam với chỉ số BMI từ 16 đến dưới 30.4" và tổ hợp "nữ với chỉ số BMI từ 16 đến dưới 30.4".
+    3.  Chi phí bảo hiểm y tế của một người có sự khác biệt giữa mọi tổ hợp cấp độ của giới tính và tình trạng hút thuốc của người đó, ngoại từ giữa tổ hợp "nam không hút thuốc" và tổ hợp "nữ không hút thuốc".
+    4.  Chi phí bảo hiểm y tế của một người có sự khác biệt giữa mọi tổ hợp cấp độ của chỉ số BMI và số con của người đó.
+    5.  Chi phí bảo hiểm y tế của một người có sự khác biệt giữa mọi tổ hợp cấp độ của chỉ số BMI và tình trạng hút thuốc của người đó, ngoại từ giữa tổ hợp "người có chỉ số BMI từ 30.4 đến 50.4 và không hút thuốc" và tổ hợp "người có chỉ số BMI từ 16 đến dưới 30.4 và không hút thuốc".
+    6.  Chi phí bảo hiểm y tế của một người có sự khác biệt giữa mọi tổ hợp cấp độ của số con và tình trạng hút thuốc của người đó, ngoại từ giữa tổ hợp "người có từ 2 đến 5 con và có hút thuốc" và tổ hợp "người không có con hoặc có 1 con và có hút thuốc".
+    7.  Chi phí bảo hiểm y tế của một người có sự khác biệt giữa hầu hết các tổ hợp cấp độ của tình trạng hút thuốc và vùng sinh sống của người đó.
+
+Tuy nhiên, vì giả định về tính chuẩn của mô hình mod_aov không được thỏa nên ta cần cân nhắc kỹ khi sử dụng mô hình này để đưa ra suy luận. Đồng thời, ta cũng có thể thử áp dụng một mô hình hoặc phương pháp khác phù hợp hơn cho bộ dữ liệu insurance.csv.
+
+### Tài liệu tham khảo
+
+[1] [https://online.stat.psu.edu/stat502/lesson/5/5.](https://online.stat.psu.edu/stat502/lesson/5/5.2){.uri}[2](https://online.stat.psu.edu/stat502/lesson/5/5.2)
